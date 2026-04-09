@@ -5,24 +5,18 @@ Streamlit-приложение: Расчёт теплового баланса �
 
 import streamlit as st
 import pandas as pd
-import numpy as np
 
 from config import (
     DEFAULTS_HEATER, RANGES_HEATER,
     DEFAULTS_ENV, RANGES_ENV,
-    DEFAULTS_CALC, DEFAULTS_PARAMETRIC,
-    PARAMETRIC_OPTIONS,
+    DEFAULTS_CALC,
 )
 from solver import solve_plate, CalculationResult
 from plotting import (
-    plot_main_2d, plot_heat_fluxes, plot_criteria,
-    plot_air_props, plot_3d_surface, plot_t_vs_x, plot_ra_vs_x,
+    plot_main_2d, plot_heat_fluxes, plot_ra_vs_x,
     plot_alpha_comparison, plot_nu_comparison,
 )
 from calculation_log import render_point_detail
-from turbulence_page import render_turbulence_tab
-from verification_data import compare_coolprop_vs_gsssd, get_gsssd_table
-from properties import get_air_properties
 from formatting import _fc, _fe
 
 
@@ -138,37 +132,6 @@ def sidebar_inputs() -> dict:
     )
     params['correlation'] = 'churchill_chu' if 'Черчилль' in corr_label else 'piecewise'
 
-    # --- Параметрическое исследование ---
-    st.sidebar.header('Параметрическое исследование')
-    params['parametric_enabled'] = st.sidebar.checkbox(
-        'Включить 3D-исследование', value=False,
-    )
-
-    if params['parametric_enabled']:
-        param_keys = list(PARAMETRIC_OPTIONS.keys())
-        param_labels = list(PARAMETRIC_OPTIONS.values())
-        selected_label = st.sidebar.selectbox(
-            'Варьируемый параметр',
-            param_labels,
-            index=0,
-        )
-        params['parametric_key'] = param_keys[param_labels.index(selected_label)]
-        params['parametric_label'] = selected_label
-
-        params['parametric_min'] = st.sidebar.number_input(
-            f'Минимум ({selected_label})',
-            value=DEFAULTS_PARAMETRIC['min'],
-        )
-        params['parametric_max'] = st.sidebar.number_input(
-            f'Максимум ({selected_label})',
-            value=DEFAULTS_PARAMETRIC['max'],
-        )
-        params['parametric_n'] = st.sidebar.slider(
-            'Число значений параметра',
-            min_value=3, max_value=30,
-            value=DEFAULTS_PARAMETRIC['n_values'],
-        )
-
     return params
 
 
@@ -196,39 +159,6 @@ def run_calculation(params: dict) -> CalculationResult:
 
     progress.empty()
     return result
-
-
-def run_parametric(params: dict) -> tuple:
-    """Параметрическое исследование: серия расчётов."""
-    key = params['parametric_key']
-    values = np.linspace(params['parametric_min'], params['parametric_max'],
-                         params['parametric_n'])
-    results = []
-    progress = st.progress(0, text='Параметрическое исследование...')
-
-    for i, val in enumerate(values):
-        p = dict(params)
-        p[key] = val
-        res = solve_plate(
-            I=float(p['I']),
-            R20=float(p['R20']),
-            alpha_R=float(p['alpha_R']),
-            b_mm=float(p['b_mm']),
-            L_mm=float(p['L_mm']),
-            t_fluid_C=float(p['t_fluid_C']),
-            g=float(p['g']),
-            C_pr=float(p['C_pr']),
-            P_Pa=float(p['P_Pa']),
-            x_min_mm=float(p['x_min_mm']),
-            N=p['N'],
-            correlation=p.get('correlation', 'piecewise'),
-        )
-        results.append(res)
-        progress.progress((i + 1) / len(values),
-                          text=f'Параметрическое исследование... {(i+1)}/{len(values)}')
-
-    progress.empty()
-    return results, values.tolist()
 
 
 # ─────────────── Сводная таблица ───────────────
@@ -280,13 +210,6 @@ def main():
         result = run_calculation(params)
         st.session_state['result'] = result
 
-        # Параметрическое исследование
-        if params.get('parametric_enabled'):
-            results, values = run_parametric(params)
-            st.session_state['parametric_results'] = results
-            st.session_state['parametric_values'] = values
-            st.session_state['parametric_label'] = params['parametric_label']
-
     result: CalculationResult = st.session_state.get('result')
 
     if result is None:
@@ -306,21 +229,20 @@ def main():
         st.error(f'{n_fail} из {result.N} точек: солвер не сошёлся.')
 
     # --- Вкладки ---
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        'Графики', 'Ход расчёта', 'Сводная таблица', 'Свойства воздуха',
-        'Турбулентный режим',
+    tab1, tab2, tab3 = st.tabs([
+        'Графики', 'Ход расчёта', 'Сводная таблица',
     ])
 
     # ─── Вкладка 1: Графики ───
     with tab1:
-        st.subheader('Температура поверхности t_c(x)')
-        st.plotly_chart(plot_t_vs_x(result), use_container_width=True)
+        st.subheader('Температура и коэфф. теплоотдачи')
+        st.plotly_chart(plot_main_2d(result), use_container_width=True)
 
         st.subheader('Число Рэлея Ra(x)')
         st.plotly_chart(plot_ra_vs_x(result), use_container_width=True)
 
-        st.subheader('Температура и коэфф. теплоотдачи (двухосевой)')
-        st.plotly_chart(plot_main_2d(result), use_container_width=True)
+        st.subheader('Компоненты теплового потока')
+        st.plotly_chart(plot_heat_fluxes(result), use_container_width=True)
 
         st.subheader('Сравнение корреляций: методичка vs Черчилль–Чу')
         col_a, col_b = st.columns(2)
@@ -328,25 +250,6 @@ def main():
             st.plotly_chart(plot_alpha_comparison(result), use_container_width=True)
         with col_b:
             st.plotly_chart(plot_nu_comparison(result), use_container_width=True)
-
-        with st.expander('Компоненты теплового потока (q_эл, q_конв, q_рад)'):
-            st.plotly_chart(plot_heat_fluxes(result), use_container_width=True)
-
-        with st.expander('Критерии подобия (Nu, Ra)'):
-            st.plotly_chart(plot_criteria(result), use_container_width=True)
-
-        with st.expander('Свойства воздуха (ν, λ, Pr) по высоте'):
-            st.plotly_chart(plot_air_props(result), use_container_width=True)
-
-        # 3D-поверхность
-        if st.session_state.get('parametric_results'):
-            st.subheader('Параметрическое исследование (3D)')
-            fig_3d = plot_3d_surface(
-                st.session_state['parametric_results'],
-                st.session_state['parametric_label'],
-                st.session_state['parametric_values'],
-            )
-            st.plotly_chart(fig_3d, use_container_width=True)
 
     # ─── Вкладка 2: Ход расчёта ───
     with tab2:
@@ -379,38 +282,6 @@ def main():
             file_name='heat_balance.csv',
             mime='text/csv',
         )
-
-    # ─── Вкладка 4: Свойства воздуха ───
-    with tab4:
-        st.subheader('Проверка свойств воздуха (CoolProp)')
-
-        col1, col2 = st.columns(2)
-        with col1:
-            t_check = st.number_input('Температура, °C', value=100.0, step=10.0)
-            p_check = st.number_input('Давление, Па', value=101325.0, step=100.0)
-        with col2:
-            air = get_air_properties(t_check, p_check)
-            st.markdown(f"""
-| Свойство | Значение |
-|---|---|
-| ν, м²/с | {_fe(air.nu, 4)} |
-| λ, Вт/(м·К) | {_fe(air.lam, 4)} |
-| Pr | {_fc(air.Pr, 4)} |
-| μ, Па·с | {_fe(air.mu, 4)} |
-| ρ, кг/м³ | {_fc(air.rho, 4)} |
-| cₚ, Дж/(кг·К) | {_fc(air.cp, 1)} |
-""")
-
-        st.subheader('Справочные данные ГСССД')
-        st.dataframe(get_gsssd_table(), use_container_width=True)
-
-        st.subheader('Сравнение CoolProp с ГСССД')
-        comparison = compare_coolprop_vs_gsssd(params['P_Pa'])
-        st.dataframe(comparison, use_container_width=True, height=400)
-
-    # ─── Вкладка 5: Турбулентный режим ───
-    with tab5:
-        render_turbulence_tab(params)
 
 
 if __name__ == '__main__':
