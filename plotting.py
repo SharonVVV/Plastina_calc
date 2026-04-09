@@ -429,3 +429,212 @@ def plot_grpr_vs_x(result: CalculationResult, x_crit_m: float = None) -> go.Figu
     )
 
     return _russian_separators(fig)
+
+
+# ─────────────── Главная композиция: пластина ───────────────
+
+def _select_display_indices(pts, zones_raw, n_target=10):
+    """Выбрать представительные точки для отображения температуры на пластине."""
+    n = len(pts)
+    if n <= n_target:
+        return list(range(n))
+
+    indices = {0, n - 1}
+    for i in range(1, n):
+        if zones_raw[i] != zones_raw[i - 1]:
+            indices.add(i - 1)
+            indices.add(i)
+
+    remaining = n_target - len(indices)
+    if remaining > 0:
+        candidates = np.linspace(0, n - 1, remaining + 2, dtype=int)
+        for c in candidates:
+            indices.add(int(c))
+
+    return sorted(indices)[:n_target]
+
+
+def plot_plate_composition(result: CalculationResult) -> go.Figure:
+    """
+    Трёхпанельная композиция: профиль t_c | пластина с зонами | профиль Ra.
+    Общая ось Y — высота x (мм).
+    """
+    pts = [p for p in result.points if p.converged]
+    if not pts:
+        fig = go.Figure()
+        fig.add_annotation(text='Нет сошедшихся точек', showarrow=False,
+                           font=dict(size=16))
+        return fig
+
+    x_mm = [p.x_m * 1000 for p in pts]
+    t_c = [p.t_c for p in pts]
+    Ra = [p.Ra for p in pts]
+
+    y_min, y_max = min(x_mm), max(x_mm)
+    y_span = y_max - y_min
+    y_pad = y_span * 0.06
+
+    fig = make_subplots(
+        rows=1, cols=3,
+        shared_yaxes=True,
+        column_widths=[0.37, 0.13, 0.37],
+        horizontal_spacing=0.03,
+    )
+
+    # ── Левая панель: профиль температуры ──
+    fig.add_trace(go.Scatter(
+        x=t_c, y=x_mm,
+        mode='lines', line=dict(color='crimson', width=2.5),
+        name='t_c',
+        hovertemplate='t_c = %{x:.1f} °C<br>x = %{y:.1f} мм<extra></extra>',
+    ), row=1, col=1)
+
+    # ── Правая панель: профиль Ra ──
+    fig.add_trace(go.Scatter(
+        x=Ra, y=x_mm,
+        mode='lines', line=dict(color='darkorange', width=2.5),
+        name='Ra',
+        hovertemplate='Ra = %{x:.2e}<br>x = %{y:.1f} мм<extra></extra>',
+    ), row=1, col=3)
+
+    fig.add_shape(
+        type='line', x0=1e9, x1=1e9,
+        y0=y_min - y_pad, y1=y_max + y_pad,
+        line=dict(color='gray', width=1.5, dash='dash'),
+        xref='x3', yref='y',
+    )
+    fig.add_annotation(
+        x=1e9, y=y_max + y_pad * 0.8,
+        text='10⁹', showarrow=False,
+        font=dict(size=9, color='gray'),
+        xref='x3', yref='y',
+    )
+
+    # ── Средняя панель: пластина ──
+
+    zones_raw = []
+    for p in pts:
+        if p.regime in ('lam', 'turb'):
+            zones_raw.append(p.regime)
+        else:
+            zones_raw.append('lam' if p.Ra <= 1e9 else 'turb')
+
+    zones = []
+    cur = zones_raw[0]
+    start_y = x_mm[0]
+    for i in range(1, len(pts)):
+        if zones_raw[i] != cur:
+            zones.append((start_y, x_mm[i], cur))
+            cur = zones_raw[i]
+            start_y = x_mm[i]
+    zones.append((start_y, x_mm[-1], cur))
+
+    px0, px1 = 0.15, 0.85
+    zone_colors = {
+        'lam': 'rgba(100, 149, 237, 0.4)',
+        'turb': 'rgba(255, 99, 71, 0.35)',
+    }
+    zone_labels = {'lam': 'Ламинарный', 'turb': 'Турбулентный'}
+
+    for zy0, zy1, regime in zones:
+        fig.add_shape(
+            type='rect', x0=px0, x1=px1, y0=zy0, y1=zy1,
+            fillcolor=zone_colors.get(regime, 'rgba(200,200,200,0.3)'),
+            line=dict(width=0),
+            xref='x2', yref='y',
+        )
+        if zy1 - zy0 > y_span * 0.08:
+            fig.add_annotation(
+                x=0.5, y=(zy0 + zy1) / 2,
+                text=zone_labels.get(regime, ''),
+                showarrow=False,
+                font=dict(size=10, color='rgba(60,60,60,0.7)'),
+                xref='x2', yref='y',
+            )
+
+    fig.add_shape(
+        type='rect', x0=px0, x1=px1, y0=y_min, y1=y_max,
+        line=dict(color='black', width=2),
+        fillcolor='rgba(0,0,0,0)',
+        xref='x2', yref='y',
+    )
+
+    for i in range(1, len(pts)):
+        if zones_raw[i] != zones_raw[i - 1]:
+            trans_y = (x_mm[i] + x_mm[i - 1]) / 2
+            fig.add_shape(
+                type='line', x0=0, x1=1, y0=trans_y, y1=trans_y,
+                line=dict(color='seagreen', width=2, dash='dot'),
+                xref='x2', yref='y',
+            )
+            fig.add_annotation(
+                x=0.5, y=trans_y, yshift=14,
+                text=f'Переход: {trans_y:.0f} мм',
+                showarrow=False,
+                font=dict(size=9, color='seagreen'),
+                xref='x2', yref='y',
+                bgcolor='rgba(255,255,255,0.8)',
+            )
+
+    display_idx = _select_display_indices(pts, zones_raw, n_target=10)
+    for i in display_idx:
+        p = pts[i]
+        fig.add_annotation(
+            x=0.5, y=p.x_m * 1000,
+            text=f'{p.t_c:.1f}°',
+            showarrow=False,
+            font=dict(size=9, color='darkred'),
+            xref='x2', yref='y',
+            bgcolor='rgba(255,255,255,0.75)',
+            borderpad=1,
+        )
+
+    b_mm = result.b_m * 1000
+    L_mm_val = result.L_m * 1000
+
+    fig.add_annotation(
+        x=0.5, y=y_max + y_pad * 1.5,
+        text=f'<b>b = {b_mm:.0f} мм</b>',
+        showarrow=False, font=dict(size=11),
+        xref='x2', yref='y',
+    )
+    fig.add_annotation(
+        x=px0, y=y_max + y_pad * 0.7, ax=px1, ay=y_max + y_pad * 0.7,
+        xref='x2', yref='y', axref='x2', ayref='y',
+        showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=1.5,
+        arrowcolor='black',
+    )
+    fig.add_annotation(
+        x=px1, y=y_max + y_pad * 0.7, ax=px0, ay=y_max + y_pad * 0.7,
+        xref='x2', yref='y', axref='x2', ayref='y',
+        showarrow=True, arrowhead=2, arrowsize=1, arrowwidth=1.5,
+        arrowcolor='black',
+    )
+    fig.add_annotation(
+        x=px1 + 0.12, y=(y_min + y_max) / 2,
+        text=f'<b>L = {L_mm_val:.0f} мм</b>',
+        showarrow=False, font=dict(size=11),
+        textangle=-90,
+        xref='x2', yref='y',
+    )
+
+    fig.update_xaxes(title_text='t_c, °C', gridcolor='#eee', row=1, col=1)
+    fig.update_xaxes(
+        range=[-0.05, 1.15], showticklabels=False, showgrid=False,
+        zeroline=False, row=1, col=2,
+    )
+    fig.update_xaxes(title_text='Ra', type='log', gridcolor='#eee', row=1, col=3)
+    fig.update_yaxes(
+        title_text='Высота x, мм', gridcolor='#eee',
+        range=[y_min - y_pad, y_max + y_pad * 2.5],
+        row=1, col=1,
+    )
+
+    fig.update_layout(
+        height=650,
+        template='plotly_white',
+        showlegend=False,
+        margin=dict(l=60, r=40, t=20, b=50),
+    )
+
+    return _russian_separators(fig)
