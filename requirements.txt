@@ -5,3 +5,5 @@ pandas>=2.0
 plotly>=5.18
 streamlit>=1.28
 matplotlib>=3.7
+ht>=1.2
+fluids>=1.0
