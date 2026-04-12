@@ -164,6 +164,12 @@ def main():
         do_calc = st.button('Рассчитать', type='primary', use_container_width=True)
 
     # ─── Расчёт ──────────────────────────────────────────────────────────
+    # Автопересчёт при смене корреляции
+    prev_corr = st.session_state.get('_last_corr')
+    if prev_corr is not None and prev_corr != corr_key and 'result' in st.session_state:
+        do_calc = True
+    st.session_state['_last_corr'] = corr_key
+
     if do_calc:
         result = solve_plate(
             I=float(I), R20=R20, alpha_R=alpha_R,
