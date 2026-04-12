@@ -164,6 +164,7 @@ def plot_main_2d(result: CalculationResult) -> go.Figure:
 
     # Зоны режимов
     lam_x = [p.x_m * 1000 for p in pts if p.regime == 'lam']
+    trans_x = [p.x_m * 1000 for p in pts if p.regime == 'trans']
     turb_x = [p.x_m * 1000 for p in pts if p.regime == 'turb']
     if lam_x:
         fig.add_vrect(
@@ -172,6 +173,14 @@ def plot_main_2d(result: CalculationResult) -> go.Figure:
             line_width=0,
             annotation_text='Ламинарный',
             annotation_position='top left',
+        )
+    if trans_x:
+        fig.add_vrect(
+            x0=min(trans_x), x1=max(trans_x),
+            fillcolor='lightgreen', opacity=0.15,
+            line_width=0,
+            annotation_text='Переходный',
+            annotation_position='top',
         )
     if turb_x:
         fig.add_vrect(
@@ -514,10 +523,11 @@ def plot_plate_composition(result: CalculationResult) -> go.Figure:
 
     zones_raw = []
     for p in pts:
-        if p.regime in ('lam', 'turb'):
+        if p.regime in ('lam', 'trans', 'turb'):
             zones_raw.append(p.regime)
         else:
-            zones_raw.append('lam' if p.Ra <= 1e9 else 'turb')
+            # 'full' (Черчилль-Чу) — единая формула, показываем как переходный
+            zones_raw.append('trans')
 
     zones = []
     cur = zones_raw[0]
@@ -532,9 +542,10 @@ def plot_plate_composition(result: CalculationResult) -> go.Figure:
     px0, px1 = 0.15, 0.85
     zone_colors = {
         'lam': 'rgba(100, 149, 237, 0.4)',
+        'trans': 'rgba(144, 238, 144, 0.4)',
         'turb': 'rgba(255, 99, 71, 0.35)',
     }
-    zone_labels = {'lam': 'Ламинарный', 'turb': 'Турбулентный'}
+    zone_labels = {'lam': 'Ламинарный', 'trans': 'Переходный', 'turb': 'Турбулентный'}
 
     for zy0, zy1, regime in zones:
         fig.add_shape(
