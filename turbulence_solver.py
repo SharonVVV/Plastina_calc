@@ -13,7 +13,7 @@ from scipy.optimize import brentq
 from properties import get_air_properties
 from correlations import calc_beta, calc_Gr, calc_eps_t, calc_Nu, calc_alpha
 from solver import heat_balance_residual, CORR_PIECEWISE
-from config import GR_PR_CRIT, BRENTQ_LOW_OFFSET, BRENTQ_HIGH_OFFSET
+from config import GR_PR_CRIT_2, BRENTQ_LOW_OFFSET, BRENTQ_HIGH_OFFSET, T_REF_FLUID
 
 
 @dataclass
@@ -30,12 +30,12 @@ class TurbulenceResult:
 
 def _solve_tc_at_x(x: float, t_fluid_C: float, P_Pa: float, g: float,
                    I: float, R20: float, b_m: float, alpha_R: float,
-                   C_pr: float) -> float:
+                   C_pr: float, t_ref_mode: str = T_REF_FLUID) -> float:
     """Решить тепловой баланс при заданном x, вернуть t_c."""
     t_lo = t_fluid_C + BRENTQ_LOW_OFFSET
     t_hi = t_fluid_C + BRENTQ_HIGH_OFFSET
 
-    args = (t_fluid_C, P_Pa, g, I, R20, b_m, alpha_R, C_pr, CORR_PIECEWISE)
+    args = (t_fluid_C, P_Pa, g, I, R20, b_m, alpha_R, C_pr, CORR_PIECEWISE, t_ref_mode)
 
     f_lo = heat_balance_residual(t_lo, x, *args)
     f_hi = heat_balance_residual(t_hi, x, *args)
@@ -50,13 +50,17 @@ def _solve_tc_at_x(x: float, t_fluid_C: float, P_Pa: float, g: float,
 
 def _grpr_at_x(x: float, t_fluid_C: float, P_Pa: float, g: float,
                I: float, R20: float, b_m: float, alpha_R: float,
-               C_pr: float) -> float:
+               C_pr: float, t_ref_mode: str = T_REF_FLUID) -> float:
     """Вычислить GrPr при заданном x (сначала решив баланс для t_c)."""
-    t_c = _solve_tc_at_x(x, t_fluid_C, P_Pa, g, I, R20, b_m, alpha_R, C_pr)
+    t_c = _solve_tc_at_x(x, t_fluid_C, P_Pa, g, I, R20, b_m, alpha_R, C_pr, t_ref_mode)
 
-    t_film = (t_c + t_fluid_C) / 2.0
-    air = get_air_properties(t_film, P_Pa)
-    beta = calc_beta(t_film)
+    if t_ref_mode == T_REF_FLUID:
+        air = get_air_properties(t_fluid_C, P_Pa)
+        beta = calc_beta(t_fluid_C)
+    else:
+        t_film = (t_c + t_fluid_C) / 2.0
+        air = get_air_properties(t_film, P_Pa)
+        beta = calc_beta(t_film)
 
     Gr = calc_Gr(g, beta, t_c - t_fluid_C, x, air.nu)
     return Gr * air.Pr
@@ -88,7 +92,7 @@ def find_x_crit(
             message=f'Ошибка расчёта: {e}',
         )
 
-    if grpr_min >= GR_PR_CRIT:
+    if grpr_min >= GR_PR_CRIT_2:
         # Уже турбулентный у основания
         t_c = _solve_tc_at_x(x_min, *common_args)
         return TurbulenceResult(
@@ -97,11 +101,11 @@ def find_x_crit(
             message='Турбулентный режим уже при x_min.',
         )
 
-    if grpr_max < GR_PR_CRIT:
+    if grpr_max < GR_PR_CRIT_2:
         # Адаптивное расширение
         for x_try in [10.0, 20.0]:
             try:
-                if _grpr_at_x(x_try, *common_args) >= GR_PR_CRIT:
+                if _grpr_at_x(x_try, *common_args) >= GR_PR_CRIT_2:
                     x_max = x_try
                     break
             except Exception:
@@ -116,7 +120,7 @@ def find_x_crit(
 
     # Найти корень: GrPr(x) - 10⁹ = 0
     def residual(x):
-        return _grpr_at_x(x, *common_args) - GR_PR_CRIT
+        return _grpr_at_x(x, *common_args) - GR_PR_CRIT_2
 
     x_crit = brentq(residual, x_min, x_max, xtol=1e-6)
     t_c_crit = _solve_tc_at_x(x_crit, *common_args)
