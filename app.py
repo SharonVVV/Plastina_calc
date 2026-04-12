@@ -10,10 +10,13 @@ from config import (
     DEFAULTS_HEATER, RANGES_HEATER,
     DEFAULTS_ENV, RANGES_ENV,
     DEFAULTS_CALC,
+    GR_PR_CRIT_1, GR_PR_CRIT_2,
 )
 from solver import solve_plate, CalculationResult
 from plotting import plot_plate_composition
 from calculation_log import render_point_detail
+from comparison_page import render_comparison_tab
+from verification_page import render_verification_tab
 from formatting import _fc, _fe
 
 
@@ -31,7 +34,7 @@ def build_summary_df(result: CalculationResult) -> pd.DataFrame:
             'Gr': _fe(pt.Gr, 3),
             'Ra': _fe(pt.Ra, 3),
             'Nu': _fc(pt.Nu, 2),
-            'Режим': {'lam': 'лам.', 'turb': 'турб.', 'full': 'Ч-Ч'}.get(pt.regime, '?'),
+            'Режим': {'lam': 'лам.', 'trans': 'перех.', 'turb': 'турб.', 'full': 'Ч-Ч'}.get(pt.regime, '?'),
             'α, Вт/(м²·К)': _fc(pt.alpha, 2),
             'q_конв': _fc(pt.q_conv, 1),
             'q_рад': _fc(pt.q_rad, 1),
@@ -116,12 +119,58 @@ def main():
             x_min_mm = st.number_input('x_min, мм', value=DEFAULTS_CALC['x_min_mm'],
                                        min_value=1.0, max_value=100.0, step=1.0)
 
-        correlation = st.selectbox(
+        corr_options = {
+            'kerimov': 'Керимов (Nu_ж, ε_t)',
+            'kuznetov': 'Кузнецов (Nu, Φ(Pr), q=const)',
+            'churchill_chu': 'Черчилль–Чу (средний Nu)',
+            'leontiev': 'Леонтьев (Брдлик / Эккерт–Дж.)',
+            'churchill_ozoe': 'Churchill & Ozoe (1973)',
+            'vliet': 'Vliet (1969/1975)',
+            'fujii': 'Fujii & Fujii (1976)',
+            'isachenko': 'Исаченко и др. (1981)',
+        }
+        corr_key = st.selectbox(
             'Корреляция',
-            ['Методичка (кусочная)', 'Черчилль–Чу (полная)'],
+            options=list(corr_options.keys()),
+            format_func=lambda k: corr_options[k],
             index=0,
         )
-        corr_key = 'churchill_chu' if 'Черчилль' in correlation else 'piecewise'
+
+        # Подсказка о методике
+        _corr_hints = {
+            'kerimov': 'Свойства при t_ж, поправка ε_t. Лам + перех + турб.',
+            'kuznetov': 'Свойства при t_плён, Φ(Pr), q_c=const. Лам + турб.',
+            'churchill_chu': 'Обобщённая, средний Nu, весь диапазон Ra.',
+            'leontiev': 'UHF: Брдлик (лам.) + Эккерт–Дж. (турб.), t_плён.',
+            'churchill_ozoe': 'UHF: только ламинарный (Ra < 10⁹), t_плён.',
+            'vliet': 'UHF: воздух, безытерац. через Ra*. Лам + турб.',
+            'fujii': 'UHF: только ламинарный, Pr-обобщённая, t_плён.',
+            'isachenko': 'UHF: свойства при t_ж, ε_t. Лам + перех + турб.',
+        }
+        st.caption(_corr_hints.get(corr_key, ''))
+
+        # Границы режимов по умолчанию зависят от методики
+        _default_crits = {
+            'kerimov': (1e9, 6e10),
+            'kuznetov': (1e9, 1e12),
+            'leontiev': (2e7, 2e7),
+            'vliet': (3.4e9, 3.4e9),
+            'isachenko': (1e9, 6e10),
+        }
+        default_c1, default_c2 = _default_crits.get(corr_key, (GR_PR_CRIT_1, GR_PR_CRIT_2))
+
+        with st.expander('Границы режимов'):
+            c1, c2 = st.columns(2)
+            with c1:
+                crit_1 = st.number_input('Ra₁ (лам→перех)',
+                                         value=default_c1,
+                                         min_value=1e4, max_value=1e15,
+                                         format='%.2e', step=1e9)
+            with c2:
+                crit_2 = st.number_input('Ra₂ (перех→турб)',
+                                         value=default_c2,
+                                         min_value=1e4, max_value=1e15,
+                                         format='%.2e', step=1e10)
 
         do_calc = st.button('Рассчитать', type='primary', use_container_width=True)
 
@@ -133,6 +182,9 @@ def main():
             t_fluid_C=float(t_fluid_C), g=g, C_pr=C_pr,
             P_Pa=float(P_Pa), x_min_mm=x_min_mm, N=N,
             correlation=corr_key,
+            t_ref_mode='auto',
+            crit_1=crit_1,
+            crit_2=crit_2,
         )
         st.session_state['result'] = result
 
@@ -143,12 +195,20 @@ def main():
         if result is not None:
             n_ok = sum(1 for p in result.points if p.converged)
             n_fail = sum(1 for p in result.points if not p.converged)
-            if result.correlation == 'piecewise':
-                n_lam = sum(1 for p in result.points if p.converged and p.regime == 'lam')
-                n_turb = sum(1 for p in result.points if p.converged and p.regime == 'turb')
-                st.caption(f'Методичка | лам: {n_lam}, турб: {n_turb} (из {n_ok})')
+            t_ref_str = 't_ж' if result.t_ref_mode == 'fluid' else 't_пл'
+            corr_names = {
+                'kerimov': 'Керимов', 'kuznetov': 'Кузнецов', 'churchill_chu': 'Ч-Ч',
+                'leontiev': 'Леонтьев', 'churchill_ozoe': 'Ch-Ozoe',
+                'vliet': 'Vliet', 'fujii': 'Fujii', 'isachenko': 'Исаченко',
+            }
+            corr_label = corr_names.get(result.correlation, result.correlation)
+            if result.correlation == 'churchill_chu':
+                st.caption(f'{corr_label} ({t_ref_str}) | {n_ok} точек')
             else:
-                st.caption(f'Черчилль–Чу | {n_ok} точек')
+                n_lam = sum(1 for p in result.points if p.converged and p.regime == 'lam')
+                n_trans = sum(1 for p in result.points if p.converged and p.regime == 'trans')
+                n_turb = sum(1 for p in result.points if p.converged and p.regime == 'turb')
+                st.caption(f'{corr_label} ({t_ref_str}) | лам: {n_lam}, перех: {n_trans}, турб: {n_turb} (из {n_ok})')
             if n_fail > 0:
                 st.error(f'{n_fail} точек не сошлись.')
 
@@ -157,18 +217,31 @@ def main():
             st.info('Задайте параметры слева и нажмите «Рассчитать».')
 
     # ─── Нижняя часть: таблица + ход расчёта ───
-    if result is not None:
-        st.markdown('---')
-        tab1, tab2 = st.tabs(['Сводная таблица', 'Ход расчёта'])
+    # Собираем параметры для передачи в доп. вкладки
+    ui_params = {
+        'I': I, 'R20': R20, 'alpha_R': alpha_R,
+        'b_mm': b_mm, 'L_mm': L_mm,
+        't_fluid_C': t_fluid_C, 'g': g, 'C_pr': C_pr,
+        'P_Pa': P_Pa, 'x_min_mm': x_min_mm,
+    }
 
-        with tab1:
+    st.markdown('---')
+    tab1, tab2, tab3, tab4 = st.tabs([
+        'Сводная таблица', 'Ход расчёта', 'Сравнение методик', 'Верификация',
+    ])
+
+    with tab1:
+        if result is not None:
             df = build_summary_df(result)
             st.dataframe(df, use_container_width=True, height=400)
             csv = df.to_csv(index=False, sep=';')
             st.download_button('Скачать CSV', data=csv,
                                file_name='heat_balance.csv', mime='text/csv')
+        else:
+            st.info('Нажмите «Рассчитать» для получения результатов.')
 
-        with tab2:
+    with tab2:
+        if result is not None:
             converged_pts = [i for i, p in enumerate(result.points) if p.converged]
             if not converged_pts:
                 st.error('Нет сошедшихся точек.')
@@ -182,6 +255,14 @@ def main():
                 st.markdown(f'**Точка {idx + 1}/{len(converged_pts)}:** '
                             f'x = {_fc(pt.x_m * 1000, 1)} мм')
                 render_point_detail(result, actual_idx)
+        else:
+            st.info('Нажмите «Рассчитать» для получения результатов.')
+
+    with tab3:
+        render_comparison_tab(ui_params)
+
+    with tab4:
+        render_verification_tab(ui_params)
 
 
 if __name__ == '__main__':

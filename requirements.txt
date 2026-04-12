@@ -4,3 +4,4 @@ CoolProp>=6.4
 pandas>=2.0
 plotly>=5.18
 streamlit>=1.28
+matplotlib>=3.7
