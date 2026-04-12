@@ -154,21 +154,25 @@ def main():
                 crit_1 = st.number_input('Ra₁ (лам→перех)',
                                          value=default_c1,
                                          min_value=1e4, max_value=1e15,
-                                         format='%.2e', step=1e9)
+                                         format='%.2e', step=1e9,
+                                         key=f'crit1_{corr_key}')
             with c2:
                 crit_2 = st.number_input('Ra₂ (перех→турб)',
                                          value=default_c2,
                                          min_value=1e4, max_value=1e15,
-                                         format='%.2e', step=1e10)
+                                         format='%.2e', step=1e10,
+                                         key=f'crit2_{corr_key}')
 
         do_calc = st.button('Рассчитать', type='primary', use_container_width=True)
 
     # ─── Расчёт ──────────────────────────────────────────────────────────
-    # Автопересчёт при смене корреляции
-    prev_corr = st.session_state.get('_last_corr')
-    if prev_corr is not None and prev_corr != corr_key and 'result' in st.session_state:
+    # Автопересчёт при смене любого параметра, влияющего на результат
+    _current_params = (corr_key, float(I), R20, alpha_R, float(b_mm),
+                       float(L_mm), float(t_fluid_C), g, C_pr, float(P_Pa),
+                       x_min_mm, N, crit_1, crit_2)
+    if st.session_state.get('_last_params') != _current_params and 'result' in st.session_state:
         do_calc = True
-    st.session_state['_last_corr'] = corr_key
+    st.session_state['_last_params'] = _current_params
 
     if do_calc:
         result = solve_plate(
