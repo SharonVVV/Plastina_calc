@@ -104,6 +104,13 @@ class CalculationResult:
     t_ref_mode: str      # 'fluid' или 'film'
     crit_1: float
     crit_2: float
+    # Поля для режима q_w = const (силиконовые нагреватели).
+    # Для классического стенда Керимова (mode='kerimov') остаются нулевыми.
+    mode: str = 'kerimov'        # 'kerimov' | 'qconst'
+    q_w: float = 0.0             # Постоянная плотность теплового потока, Вт/м²
+    N_total_W: float = 0.0       # Полная электрическая мощность, Вт (qconst)
+    A_m2: float = 0.0            # Площадь обогрева b·L, м² (qconst)
+    eps_surface: float = 0.0     # Степень черноты покрытия (qconst)
 
 
 def _get_t_ref_mode(correlation: str, t_ref_mode: str) -> str:
@@ -180,8 +187,12 @@ def heat_balance_residual(t_c: float, x: float, t_fluid_C: float, P_Pa: float,
 
 def _compute_point(t_c, x, t_fluid_C, P_Pa, g, I, R20, b_m,
                    alpha_R, C_pr, correlation, t_ref_mode,
-                   crit_1, crit_2) -> PointResult:
-    """Пересчёт ВСЕХ промежуточных величин для найденного t_c."""
+                   crit_1, crit_2,
+                   q_el_override: Optional[float] = None) -> PointResult:
+    """Пересчёт ВСЕХ промежуточных величин для найденного t_c.
+
+    Если задан q_el_override — используется он (режим q_w = const),
+    иначе q_эл считается по закону Джоуля–Ленца с ТКС (стенд Керимова)."""
     air_ref, beta, t_film = _get_ref_properties(t_c, t_fluid_C, P_Pa, t_ref_mode)
 
     delta_T = t_c - t_fluid_C
@@ -201,7 +212,7 @@ def _compute_point(t_c, x, t_fluid_C, P_Pa, g, I, R20, b_m,
     Nu_alt = calc_Nu_churchill_chu(Ra, air_ref.Pr)
     alpha_alt = calc_alpha(Nu_alt, air_ref.lam, x)
 
-    q_e = calc_q_el(I, R20, b_m, t_c, alpha_R)
+    q_e = calc_q_el(I, R20, b_m, t_c, alpha_R) if q_el_override is None else q_el_override
     q_c = calc_q_conv(alpha, t_c, t_fluid_C)
     q_r = calc_q_rad(C_pr, t_c + 273.15, t_fluid_C + 273.15)
 
@@ -295,4 +306,129 @@ def solve_plate(
         t_ref_mode=actual_t_ref,
         crit_1=crit_1,
         crit_2=crit_2,
+        mode='kerimov',
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Режим q_w = const (силиконовые нагреватели на тыльной стороне теплораспределителя).
+# Полная электрическая мощность фиксирована, q_w = N_эл / (b·L) не зависит от t_c.
+# Уравнение баланса упрощается:  F(t_c) = q_w − q_конв(t_c) − q_рад(t_c) = 0
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def heat_balance_residual_qconst(t_c: float, x: float, t_fluid_C: float, P_Pa: float,
+                                 g: float, q_w: float, C_pr: float,
+                                 correlation: str = CORR_KERIMOV,
+                                 t_ref_mode: str = T_REF_FILM,
+                                 crit_1: float = GR_PR_CRIT_1,
+                                 crit_2: float = GR_PR_CRIT_2) -> float:
+    """Невязка теплового баланса при q_w = const: F(t_c) = q_w − q_конв − q_рад."""
+    air_ref, beta, _ = _get_ref_properties(t_c, t_fluid_C, P_Pa, t_ref_mode)
+
+    delta_T = t_c - t_fluid_C
+    Gr = calc_Gr(g, beta, delta_T, x, air_ref.nu)
+    Ra = calc_Ra(Gr, air_ref.Pr)
+    GrPr = Gr * air_ref.Pr
+
+    air_inf = get_air_properties(t_fluid_C, P_Pa)
+    air_c = get_air_properties(t_c, P_Pa)
+    eps_t = calc_eps_t(air_inf.Pr, air_c.Pr)
+
+    Nu, _ = _calc_nu_by_mode(correlation, Ra, air_ref.Pr, GrPr, eps_t,
+                             crit_1, crit_2)
+    alpha = calc_alpha(Nu, air_ref.lam, x)
+
+    q_c = calc_q_conv(alpha, t_c, t_fluid_C)
+    q_r = calc_q_rad(C_pr, t_c + 273.15, t_fluid_C + 273.15)
+
+    return q_w - q_c - q_r
+
+
+def solve_plate_qconst(
+    q_w: float,
+    b_mm: float, L_mm: float,
+    t_fluid_C: float, g: float, C_pr: float, P_Pa: float,
+    x_min_mm: float, N: int,
+    correlation: str = CORR_KERIMOV,
+    t_ref_mode: str = 'auto',
+    crit_1: float = GR_PR_CRIT_1,
+    crit_2: float = GR_PR_CRIT_2,
+    eps_surface: float = 0.0,
+    N_total_W: float = 0.0,
+    progress_callback: Optional[Callable[[float], None]] = None,
+) -> CalculationResult:
+    """Решение теплового баланса по высоте пластины при q_w = const.
+
+    Силиконовые нагреватели на тыльной стороне теплораспределителя
+    с фиксированной мощностью обеспечивают граничное условие 2-го рода.
+    """
+    b_m = b_mm / 1000.0
+    L_m = L_mm / 1000.0
+    x_min_m = x_min_mm / 1000.0
+
+    actual_t_ref = _get_t_ref_mode(correlation, t_ref_mode)
+
+    x_array = np.linspace(x_min_m, L_m, N)
+    points: List[PointResult] = []
+
+    args = (t_fluid_C, P_Pa, g, q_w, C_pr,
+            correlation, actual_t_ref, crit_1, crit_2)
+
+    # Расширенный интервал brentq для случая высокого q_w (t_c может уходить за 400 °C).
+    HI_PRIMARY = 1500.0
+    HI_FALLBACK = 2000.0
+
+    for i, x in enumerate(x_array):
+        t_lo = t_fluid_C + BRENTQ_LOW_OFFSET
+        t_hi = t_fluid_C + HI_PRIMARY
+
+        try:
+            f_lo = heat_balance_residual_qconst(t_lo, x, *args)
+            f_hi = heat_balance_residual_qconst(t_hi, x, *args)
+
+            if f_lo * f_hi > 0:
+                t_hi = t_fluid_C + HI_FALLBACK
+                f_hi = heat_balance_residual_qconst(t_hi, x, *args)
+                if f_lo * f_hi > 0:
+                    points.append(_make_error_point(x,
+                        f'F не меняет знак на [{t_lo:.1f}, {t_hi:.1f}]'))
+                    if progress_callback:
+                        progress_callback((i + 1) / N)
+                    continue
+
+            t_c = brentq(heat_balance_residual_qconst, t_lo, t_hi,
+                         args=(x, *args), xtol=1e-8)
+            # _compute_point ожидает (..., I, R20, b_m, alpha_R, C_pr, ...).
+            # В режиме q_w=const подставляем нули для I/R20/alpha_R и q_el_override=q_w.
+            pt = _compute_point(
+                t_c, x, t_fluid_C, P_Pa, g,
+                0.0, 0.0, b_m, 0.0, C_pr,
+                correlation, actual_t_ref,
+                crit_1, crit_2,
+                q_el_override=q_w,
+            )
+
+        except Exception as e:
+            pt = _make_error_point(x, str(e))
+
+        points.append(pt)
+        if progress_callback:
+            progress_callback((i + 1) / N)
+
+    return CalculationResult(
+        points=points,
+        I=0.0, R20=0.0, alpha_R=0.0,
+        b_m=b_m, t_fluid_C=t_fluid_C,
+        g=g, C_pr=C_pr, P_Pa=P_Pa,
+        L_m=L_m, x_min_m=x_min_m, N=N,
+        correlation=correlation,
+        t_ref_mode=actual_t_ref,
+        crit_1=crit_1,
+        crit_2=crit_2,
+        mode='qconst',
+        q_w=q_w,
+        N_total_W=N_total_W,
+        A_m2=b_m * L_m,
+        eps_surface=eps_surface,
     )
