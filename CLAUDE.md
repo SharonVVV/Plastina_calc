@@ -53,20 +53,38 @@ pages/1_Задача_1_Турбулентность.py — Streamlit-стран�
 ```
 correlations_horizontal.py  — Леонтьев 1979 (7.30) для верхнего торца
 task2_solver.py             — 1D fin-уравнение по высоте + Picard + Thomas,
-                              MATERIALS = {Д16, АМг3, нерж, медь};
-                              + compute_back_front_temps() для Task 3
+                              MATERIALS = {Д16, АМг3, нерж, медь},
+                              INSULATION_MATERIALS = {аэрогель, PUR, EPS,
+                                  каменная/мин/каолиновая вата, силикат
+                                  кальция, перлит, шамот};
+                              + _h_eff_with_insulation() — общий helper
+                                для подсчёта эффективного h на торце через
+                                последовательное сопротивление изо + α_внеш;
+                              + compute_back_front_temps() — оставлен на
+                                будущее (Task 3 им не пользуется)
 plotting_task2.py           — plot_temperature_profile (Task 2),
-                              plot_temperature_profile_back_front (Task 3),
-                              plot_heat_balance (общий)
-pages/2_Задача_2_Реальная_пластина.py — Task 2: T_mean(z) + баланс
-pages/3_Задача_3_Температура_лицевой_грани.py — Task 3: T_front(z) + T_back(z)
+                              plot_alpha_ra_profile (Task 2 — α(z), Ra(z)),
+                              plot_heat_balance (общий),
+                              plot_temperature_profile_back_front
+                                  (не используется ни одной страницей сейчас,
+                                  оставлен для совместимости)
+pages/2_Задача_2_Реальная_пластина.py — Task 2: T_mean(z) + баланс + α/Ra
+pages/3_Задача_3_Подбор_изоляции_торцов.py — Task 3: insulation selection
 ```
 
-**Task 3 — отличия от Task 2:** базовый солвер тот же. Дополнительно
-вызывается `compute_back_front_temps(result)`, которая по линейному
-профилю поперёк δ восстанавливает T_back и T_front из решения T_mean
-(допущение Bi ≪ 1). KPI/график/Step-by-step текст переориентированы
-на T_front как первичный результат, T_back — вторичный (пунктир).
+**Task 3 — что отличается от Task 2:**
+- Базовый солвер `solve_task2` тот же, но вызывается с параметрами изоляции:
+  `sides_iso_thickness_mm`, `sides_iso_lambda`, `top_iso_*`, `bottom_iso_*`.
+- Для каждого торца, если толщина > 0, вычисляется эффективный коэффициент
+  $1/h_\text{eff} = \delta_\text{изо}/\lambda_\text{изо} + 1/\alpha_\text{внеш}$,
+  и радиация через изоляцию **обнуляется** (по ТЗ пользователя).
+- Лицевая грань (b·L) никогда не изолируется — это основная радиирующая
+  поверхность.
+- Изолированное днище: $\alpha_\text{внеш} = 0$ (горизонтальная вниз, нативной
+  конвекции нет) → $h_\text{eff} \approx 0$, потери практически нулевые.
+- Страница даёт три раздела: сравнение «без/с изоляцией» в одной таблице,
+  sweep по толщине 0…100 мм с двойным графиком (% долей и T_max), и
+  таблицу сравнения всех 9 материалов при заданной толщине.
 
 Legacy-файлы (не трогаем без явной просьбы):
 `app_legacy_backup.py` (=исходный `app.py`), `solver.py`, `correlations.py`,
@@ -120,6 +138,38 @@ Bejan 2013, Holman 2010, Jiji 2009, Incropera 2011, Леонтьев 2018,
   ≪ 0,01% при сходимости. Это smoke-test любого изменения солвера.
 - **Материалы** — встроенные ключи в `task2_solver.MATERIALS`
   (Д16-Т, АМг3, AISI 304, медь), + поле в expander для произвольного λ.
+- **Дефолты страницы**: b=100 мм, L=2000 мм, δ=12 мм, N=480 Вт,
+  Д16-Т (λ=130), Керимов 1992, **ε=0,05** (полированный Д16 по Holman A-10).
+  При смене материала на нержавейку реальное ε ≈ 0,3–0,4.
+- **Переключатель «axial_conduction»** (в expander «Доп. параметры»).
+  ON (default): включён член λ_м·d²T/dz², профиль T(z) сглажен (для Al
+  масштаб сглаживания ~355 мм). OFF: каждое сечение решается как локальный
+  баланс (без переноса по металлу), получается классический «хампообразный»
+  профиль с пиком в зоне lam→trans. Edge BC отключаются вместе с
+  кондуктивом (иначе крайние узлы дают 1/dz-артефакт).
+- **Профили α(z) и Ra(z)** на странице (под T(z)). Re явно не показываем —
+  для свободной конвекции Re ≡ √Gr, отдельная кривая не нужна.
+
+## Ключевые конвенции (Задача 3 — изоляция торцов)
+
+- Базовый солвер тот же (`solve_task2`), но с дополнительными параметрами:
+  `sides_iso_thickness_mm`, `sides_iso_lambda`, `top_iso_*`, `bottom_iso_*`.
+  Если толщина = 0 — без изоляции для этого торца.
+- **Эффективный коэффициент** через последовательное сопротивление:
+  $1/h_\text{eff} = \delta_\text{изо}/\lambda_\text{изо} + 1/\alpha_\text{внеш}$.
+  Helper `_h_eff_with_insulation()` в `task2_solver.py`.
+- **Радиация через изоляцию = 0** (по ТЗ пользователя). В постпроцессе
+  для изолированных торцов `Q_*_rad_W = 0`.
+- **Лицевая грань никогда не изолируется** — это основная радиирующая
+  поверхность.
+- **Изолированное днище**: $\alpha_\text{внеш} = 0$ (горизонталь вниз, нет
+  конвекции), радиации нет → потери ≈ 0.
+- **9 материалов** в `INSULATION_MATERIALS`: аэрогель (λ=0,015), PUR (0,025),
+  EPS (0,035), каменная вата (0,040), мин. вата (0,045, default),
+  каолиновая (0,060), силикат кальция (0,060), перлит (0,060), шамот (0,200).
+- **Три раздела на странице**: сравнение «без/с изоляцией» в одной таблице,
+  sweep по толщине 0…100 мм (с маркером текущей толщины), таблица всех
+  материалов при текущей толщине (с маркером ← текущий).
 
 ## Типографика и UI (Задача 1)
 
@@ -139,10 +189,12 @@ Bejan 2013, Holman 2010, Jiji 2009, Incropera 2011, Леонтьев 2018,
 | Цель | Команда |
 |---|---|
 | Запустить UI | `streamlit run app.py` |
+| Запустить legacy UI | `streamlit run app_legacy_backup.py` |
 | Smoke-test 8 методик (Task 1) | `python3 -c "from task1_solver import *; from correlations_meta import ORDER; …"` |
-| Smoke-test Task 2 | `python3 -c "from task2_solver import solve_task2; r = solve_task2(key='kerimov_1992', N_total_W=1000, b_mm=100, L_mm=2000, delta_mm=12, lambda_metal=130, …); print(r.residual_pct)"` |
+| Smoke-test Task 2 | `python3 -c "from task2_solver import solve_task2; r = solve_task2(key='kerimov_1992', N_total_W=480, b_mm=100, L_mm=2000, delta_mm=12, lambda_metal=130, eps_surface=0.05); print(r.T_max_C, r.residual_pct)"` |
+| Smoke-test Task 3 (с изоляцией) | `python3 -c "from task2_solver import solve_task2; r = solve_task2(key='kerimov_1992', N_total_W=480, b_mm=100, L_mm=2000, delta_mm=12, lambda_metal=130, eps_surface=0.05, sides_iso_thickness_mm=20, sides_iso_lambda=0.045); print(r.T_max_C, r.Q_sides_W, r.residual_pct)"` |
 | Compile-check Task 1 | `python3 -m py_compile correlations_uhf.py task1_solver.py correlations_meta.py plotting_task1.py "pages/1_Задача_1_Турбулентность.py"` |
-| Compile-check Task 2 | `python3 -m py_compile correlations_horizontal.py task2_solver.py plotting_task2.py "pages/2_Задача_2_Реальная_пластина.py"` |
+| Compile-check Task 2/3 | `python3 -m py_compile correlations_horizontal.py task2_solver.py plotting_task2.py "pages/2_Задача_2_Реальная_пластина.py" "pages/3_Задача_3_Подбор_изоляции_торцов.py"` |
 | Тесты (legacy) | `pytest natural_convection/tests/` |
 
 ## Что НЕ менять без серьёзных оснований
@@ -153,6 +205,17 @@ Bejan 2013, Holman 2010, Jiji 2009, Incropera 2011, Леонтьев 2018,
 - Поле `t_ref` методики — это часть её физической постановки, не косметика.
 - Структура `UHFCorrelation.needs` — определяет, что передавать в Nu.
   Добавление аргумента требует обновления `compute_nu`.
+- Формула верхнего торца — Леонтьев 1979 (7.30), стр. 309 + стр. 312.
+  Это отечественный первоисточник, выбран намеренно вместо МакАдамса
+  (Holman) — коэффициенты в турбулентной зоне отличаются (0,135 vs 0,15).
+- `INSULATION_MATERIALS` — λ-значения типовые при ~50…100°C. При
+  расчётах при высоких температурах (например, для шамота при 600 °C)
+  λ заметно растёт; в текущей модели температурная зависимость λ_изо
+  не учитывается.
+- Кэш `@st.cache_data` поверх `_run(...)` ключуется по всем параметрам;
+  добавление нового аргумента в `solve_task2` требует и добавления в
+  сигнатуру `_run` (иначе будет stale-кэш). Уже сделано для
+  `axial_conduction` и для изоляции.
 
 ## Где история решений
 
