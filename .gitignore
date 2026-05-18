@@ -6,3 +6,6 @@ dist/
 build/
 .idea/
 .vscode/
+.DS_Store
+_docx_gen/
+~$*
