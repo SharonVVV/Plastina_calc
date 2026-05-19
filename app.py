@@ -35,6 +35,7 @@ _LANDING_CSS = """
 .task-card.t1::before {background: #1f3a5f;}
 .task-card.t2::before {background: #c44e2a;}
 .task-card.t3::before {background: #2c8d52;}
+.task-card.t4::before {background: #6a4b9c;}
 .task-card .task-num {font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: #6b6b6b; margin: 0;}
 .task-card h2 {font-family: "IBM Plex Serif", Georgia, serif; font-weight: 600; font-size: 1.32rem; line-height: 1.22; color: #1a1a1a; margin: 0 0 0.2rem 0;}
 .task-card .goal {font-size: 0.95rem; color: #2a2a2a; margin: 0 0 0.55rem 0; line-height: 1.5;}
@@ -70,7 +71,7 @@ st.markdown(
 
 # ── Три карточки задач ───────────────────────────────────────────────────
 
-col1, col2, col3 = st.columns(3, gap='medium')
+col1, col2, col3, col4 = st.columns(4, gap='medium')
 
 
 def _card(col, *, css_class, num, title, goal, deliverables, meta):
@@ -172,6 +173,34 @@ with col3:
     st.page_link(
         'pages/3_Задача_3_Подбор_изоляции_торцов.py',
         label='Открыть Задачу 3 →',
+        use_container_width=True,
+    )
+
+_card(
+    col4,
+    css_class='t4',
+    num='Задача 4',
+    title='Симулятор лабораторного стенда',
+    goal='Виртуальная копия установки Керимова. Задайте мощность, '
+         'нажмите «Включить» — стенд прогревается с анимацией ~5 сек до '
+         'установившегося режима. 20 термопар по высоте «снимают» '
+         'распределение температур, рядом — псевдо-BOS погранслоя.',
+    deliverables=[
+        'Тепловая карта пластины (Inferno) с маркерами 20 термопар',
+        'Псевдо-BOS / шлирен-визуализация погранслоя сбоку',
+        'Анимация прогрева T(t) = T<sub>∞</sub> + ΔT·(1 − e<sup>−t/τ</sup>)',
+        'Таблица показаний термопар + расчётные блоки в expander',
+    ],
+    meta=[
+        '20 термопар',
+        'animation ~ 5 c',
+        'BOS-шлирен',
+    ],
+)
+with col4:
+    st.page_link(
+        'pages/4_Задача_4_Симуляция.py',
+        label='Открыть Задачу 4 →',
         use_container_width=True,
     )
 
