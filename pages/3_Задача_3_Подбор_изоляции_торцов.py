@@ -422,6 +422,68 @@ st.caption(
 
 st.markdown('<hr class="t3-rule">', unsafe_allow_html=True)
 st.markdown(
+    '<p class="t3-section-eyebrow">Экспорт данных</p>'
+    '<h2 class="t3-section-title">Поле температуры пластины по высоте (CSV)</h2>',
+    unsafe_allow_html=True,
+)
+
+
+def _temperature_field_df(r_no_iso, r_with_iso):
+    """Узловой профиль T(z) обоих прогонов (с изоляцией и baseline) в одном
+    DataFrame. Сетка узлов у прогонов одинаковая (один L и N_nodes),
+    поэтому координату z берём из прогона с изоляцией."""
+    t_inf = r_with_iso.t_fluid_C
+    return pd.DataFrame({
+        'z, мм':                   [n.z_m * 1000.0 for n in r_with_iso.nodes],
+        'z, м':                    [n.z_m for n in r_with_iso.nodes],
+        'T_пов. с изоляцией, °C':  [n.T_s_C for n in r_with_iso.nodes],
+        'T_пов. без изоляции, °C': [n.T_s_C for n in r_no_iso.nodes],
+        'ΔT = T−t_∞, К':           [n.T_s_C - t_inf for n in r_with_iso.nodes],
+        'Режим конвекции':         [n.regime for n in r_with_iso.nodes],
+        'α конв, Вт/(м²·К)':       [n.alpha_front for n in r_with_iso.nodes],
+        'q конв, Вт/м²':           [n.q_conv_per_m2 for n in r_with_iso.nodes],
+        'q рад, Вт/м²':            [n.q_rad_per_m2 for n in r_with_iso.nodes],
+        'Ra_x':                    [n.Ra_x for n in r_with_iso.nodes],
+    })
+
+
+_field_df = _temperature_field_df(r_base, r_iso)
+# Разделитель «;» + десятичная запятая + BOM — чтобы Excel (RU) открыл сразу.
+_field_csv = _field_df.to_csv(index=False, sep=';', decimal=',').encode('utf-8-sig')
+_iso_tag = (
+    f'iso{int(iso_thickness_mm)}mm' if (iso_sides or iso_top or iso_bottom)
+    else 'noiso'
+)
+_field_name = f'task3_T_field_{r_iso.key}_L{int(L_mm)}mm_{_iso_tag}.csv'
+
+ec1, ec2 = st.columns([1, 2])
+with ec1:
+    st.download_button(
+        '📥 Скачать T(z) в CSV',
+        data=_field_csv,
+        file_name=_field_name,
+        mime='text/csv',
+        use_container_width=True,
+        help='Профиль температуры поверхности по высоте (с изоляцией и без) '
+             'плюс α(z), плотности потоков, Ra_x и режим конвекции '
+             'в каждом узле сетки.',
+    )
+with ec2:
+    st.caption(
+        f'Выгрузка содержит <b>{len(_field_df)}</b> узлов по высоте '
+        f'(0…{int(L_mm)} мм). Колонки: T поверхности для текущей конфигурации '
+        'с изоляцией и для baseline без неё, перегрев ΔT, режим конвекции, '
+        'α(z), плотности конвективного и радиационного потоков и число '
+        'Ra_x. Формат: разделитель «;», десятичная запятая, кодировка '
+        'UTF-8 (Excel открывает напрямую).',
+        unsafe_allow_html=True,
+    )
+
+
+# ── Sweep по толщине ─────────────────────────────────────────────────────
+
+st.markdown('<hr class="t3-rule">', unsafe_allow_html=True)
+st.markdown(
     '<p class="t3-section-eyebrow">Раздел 2 · Чувствительность по толщине</p>'
     f'<h2 class="t3-section-title">'
     f'Как меняются доли потерь с ростом толщины ({iso_material})</h2>',
